@@ -1,0 +1,75 @@
+# Docker Compose Override Example for Production Rate Limiting
+# Copy this to docker-compose.override.yml and customize as needed
+
+version: '3.8'
+
+services:
+  nginx-llm-proxy:
+    # Production nginx configuration with custom rate limits
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro  # Use production config
+      - nginx-logs:/var/log/nginx
+      - /etc/letsencrypt:/etc/letsencrypt:ro  # SSL certificates (if using HTTPS)
+    environment:
+      # Add any additional environment variables
+      - TZ=UTC
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  stratus-agent:
+    # Production agent configuration
+    environment:
+      # Override rate limit settings for production
+      - RATE_LIMIT_MAX_RETRIES=10
+      - RATE_LIMIT_RETRY_DELAY=120
+      - RATE_LIMIT_BACKOFF_FACTOR=2.0
+      
+      # Production logging
+      - LOG_LEVEL=INFO
+      
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Optional: Add Redis for advanced token limiting
+  redis:
+    image: redis:7-alpine
+    container_name: stratus-redis
+    networks:
+      - stratus-network
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+    driver: local

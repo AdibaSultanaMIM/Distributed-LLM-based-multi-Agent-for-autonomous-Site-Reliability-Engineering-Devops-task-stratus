@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  nginx-llm-proxy:
+    image: nginx:alpine
+    container_name: stratus-nginx-proxy
+    ports:
+      - "8080:8080"  # OpenAI proxy
+      - "8081:8081"  # Azure OpenAI proxy
+      - "8082:8082"  # Anthropic proxy
+      - "8888:8888"  # Health check
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx-logs:/var/log/nginx
+    environment:
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+    networks:
+      - stratus-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8888/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  stratus-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stratus-agent
+    depends_on:
+      nginx-llm-proxy:
+        condition: service_healthy
+    environment:
+      # LLM Provider Configuration
+      - PROVIDER_AGENTS=${PROVIDER_AGENTS}
+      - PROVIDER_TOOLS=${PROVIDER_TOOLS}
+      - MODEL_AGENTS=${MODEL_AGENTS}
+      - MODEL_TOOLS=${MODEL_TOOLS}
+      
+      # API Keys (passed to nginx via headers)
+      - API_KEY_AGENTS=${API_KEY_AGENTS}
+      - API_KEY_TOOLS=${API_KEY_TOOLS}
+      
+      # Rate Limiting Configuration
+      - USE_NGINX_PROXY=true
+      - NGINX_PROXY_HOST=nginx-llm-proxy
+      - OPENAI_PROXY_URL=http://nginx-llm-proxy:8080
+      - AZURE_OPENAI_PROXY_URL=http://nginx-llm-proxy:8081
+      - ANTHROPIC_PROXY_URL=http://nginx-llm-proxy:8082
+      
+      # Retry Configuration
+      - RATE_LIMIT_MAX_RETRIES=5
+      - RATE_LIMIT_RETRY_DELAY=60
+      - RATE_LIMIT_BACKOFF_FACTOR=1.5
+      
+      # Other configurations
+      - URL_AGENTS=${URL_AGENTS}
+      - URL_TOOLS=${URL_TOOLS}
+      - API_VERSION_AGENTS=${API_VERSION_AGENTS}
+      - API_VERSION_TOOLS=${API_VERSION_TOOLS}
+      - TEMPERATURE_AGENTS=${TEMPERATURE_AGENTS:-0.7}
+      - TEMPERATURE_TOOLS=${TEMPERATURE_TOOLS:-0.7}
+      - MAX_TOKENS_AGENTS=${MAX_TOKENS_AGENTS:-2000}
+      - MAX_TOKENS_TOOLS=${MAX_TOKENS_TOOLS:-2000}
+    volumes:
+      - ./src:/app/stratus/src
+      - ./eval:/app/stratus/eval
+      - ./trace_output:/app/stratus/trace_output
+      - stratus-data:/app/data
+    networks:
+      - stratus-network
+    restart: unless-stopped
+
+volumes:
+  nginx-logs:
+    driver: local
+  stratus-data:
+    driver: local
+
+networks:
+  stratus-network:
+    driver: bridge
